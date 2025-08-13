@@ -12,12 +12,24 @@ interface MonitoringResult {
   total_records: number
   results: {
     type: string
+    query?: string
+    domain_detected?: string
+    interpretation?: string
+    analysis_performed?: string
     total_anomalies: number
     message: string
+    summary?: string
     anomalies?: Array<{
       symbol: string
-      contract_type: string
+      value: string
+      threshold: string
       severity: string
+      details: string
+      action_required?: string
+      business_impact?: string
+      reason?: string
+      timestamp?: string
+      contract_type?: string
       [key: string]: any
     }>
   }
@@ -176,22 +188,54 @@ export function AIMonitoring() {
         </button>
       </div>
 
-      {/* Custom Goal */}
+      {/* Custom Goal Input */}
       <div className="custom-section">
-        <h3>🎯 Custom Monitoring Goal</h3>
-        <div className="custom-goal">
+        <h3>🎯 Custom AI Analysis</h3>
+        <p>Ask your AI anything about your data - it will automatically detect the domain and provide actionable insights!</p>
+        
+        <div className="example-queries">
+          <h4>Try these example queries:</h4>
+          <div className="query-examples">
+            <button 
+              onClick={() => setCustomGoal("what should I watch out for in my options data?")}
+              className="example-query-btn"
+            >
+              "What should I watch out for?"
+            </button>
+            <button 
+              onClick={() => setCustomGoal("find undervalued opportunities")}
+              className="example-query-btn"
+            >
+              "Find undervalued opportunities"
+            </button>
+            <button 
+              onClick={() => setCustomGoal("show me high-risk positions")}
+              className="example-query-btn"
+            >
+              "Show me high-risk positions"
+            </button>
+            <button 
+              onClick={() => setCustomGoal("what looks suspicious in my data?")}
+              className="example-query-btn"
+            >
+              "What looks suspicious?"
+            </button>
+          </div>
+        </div>
+        
+        <div className="input-group">
           <textarea
             value={customGoal}
             onChange={(e) => setCustomGoal(e.target.value)}
-            placeholder="Describe what you want the AI to monitor in your options trading data. Example: 'watch for unusual put/call ratios in tech stocks that might indicate market sentiment changes'"
-            rows={4}
+            placeholder="Ask your AI anything: 'what should I watch out for?', 'find undervalued opportunities', 'show me risks', etc."
+            rows={3}
           />
           <button 
-            onClick={runCustomGoal}
-            disabled={loading || !customGoal.trim()}
-            className="run-custom-btn"
+            onClick={runCustomGoal} 
+            disabled={loading}
+            className="run-button custom-button"
           >
-            {loading ? 'Running AI Analysis...' : 'Run Custom Analysis'}
+            {loading ? '🔄 AI Analyzing...' : '🤖 Ask AI'}
           </button>
         </div>
       </div>
@@ -216,29 +260,69 @@ export function AIMonitoring() {
       {/* Results Display */}
       {result && (
         <div className="results-section">
-          <h3>📈 Monitoring Results</h3>
+          <h3>🤖 AI Analysis Results</h3>
           
           <div className="result-summary">
-            <h4>Scenario: {result.scenario}</h4>
-            <p>Analysis Type: {result.results.type}</p>
-            <p>Records Analyzed: {result.total_records}</p>
+            {result.results.query && <h4>Query: "{result.results.query}"</h4>}
+            {result.results.domain_detected && (
+              <div className="domain-info">
+                <p><strong>Domain Detected:</strong> {result.results.domain_detected.replace('_', ' ').toUpperCase()}</p>
+                {result.results.interpretation && <p><em>{result.results.interpretation}</em></p>}
+              </div>
+            )}
+            
+            <div className="analysis-info">
+              <p><strong>Analysis Type:</strong> {result.results.type}</p>
+              <p><strong>Records Analyzed:</strong> {result.total_records}</p>
+              {result.results.analysis_performed && <p><strong>Method:</strong> {result.results.analysis_performed}</p>}
+            </div>
             
             <div className="anomaly-summary">
               <div className="anomaly-count">
                 <span className="count">{result.results.total_anomalies}</span>
-                <span className="label">Anomalies Detected</span>
+                <span className="label">Actionable Insights Found</span>
               </div>
               
               {result.results.anomalies && result.results.anomalies.length > 0 && (
                 <div className="anomalies-list">
-                  <h5>Top Anomalies:</h5>
-                  {result.results.anomalies.slice(0, 3).map((anomaly, index) => (
-                    <div key={index} className="anomaly-item">
-                      <p><strong>{anomaly.symbol} {anomaly.contract_type}</strong></p>
-                      <p>Severity: <span className={`severity ${anomaly.severity.toLowerCase()}`}>{anomaly.severity}</span></p>
-                      {anomaly.implied_volatility && <p>IV: {anomaly.implied_volatility.toFixed(4)}</p>}
-                      {anomaly.volume && <p>Volume: {anomaly.volume.toLocaleString()}</p>}
-                      {anomaly.premium_ratio && <p>Premium Ratio: {anomaly.premium_ratio.toFixed(4)}</p>}
+                  <h5>🎯 Actionable Recommendations:</h5>
+                  {result.results.anomalies.map((anomaly, index) => (
+                    <div key={index} className="anomaly-item actionable">
+                      <div className="anomaly-header">
+                        <h6><strong>{anomaly.symbol}</strong></h6>
+                        <span className={`severity-badge ${anomaly.severity.toLowerCase()}`}>
+                          {anomaly.severity}
+                        </span>
+                      </div>
+                      
+                      <div className="anomaly-details">
+                        <p><strong>Finding:</strong> {anomaly.value}</p>
+                        <p><strong>Threshold:</strong> {anomaly.threshold}</p>
+                        <p><strong>Details:</strong> {anomaly.details}</p>
+                        
+                        {anomaly.action_required && (
+                          <div className="action-required">
+                            <p><strong>🚨 ACTION REQUIRED:</strong></p>
+                            <p className="action-text">{anomaly.action_required}</p>
+                          </div>
+                        )}
+                        
+                        {anomaly.business_impact && (
+                          <div className="business-impact">
+                            <p><strong>💼 Business Impact:</strong> {anomaly.business_impact}</p>
+                          </div>
+                        )}
+                        
+                        {anomaly.reason && (
+                          <div className="reasoning">
+                            <p><strong>📊 Analysis:</strong> {anomaly.reason}</p>
+                          </div>
+                        )}
+                        
+                        {anomaly.timestamp && (
+                          <p className="timestamp"><small>Detected: {new Date(anomaly.timestamp).toLocaleString()}</small></p>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -254,9 +338,17 @@ export function AIMonitoring() {
               </p>
             </div>
 
-            <div className="summary-text">
-              <h5>Summary:</h5>
-              <pre>{result.results.message}</pre>
+            <div className="ai-summary">
+              <h5>🧠 AI Analysis Summary:</h5>
+              <div className="summary-content">
+                <p className="main-message">{result.results.message}</p>
+                {result.results.summary && (
+                  <div className="detailed-summary">
+                    <p><strong>Detailed Analysis:</strong></p>
+                    <p>{result.results.summary}</p>
+                  </div>
+                )}
+              </div>
             </div>
 
           </div>

@@ -1,17 +1,6 @@
 import os
 import json
-import base64
-import io
-from typing import Dict, Any, Optional, List
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import requests
-from sqlalchemy import create_engine, text
-from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Dict, Any, Optional, List, Literal
 import modal
 
 # Create Modal app
@@ -28,18 +17,6 @@ image = modal.Image.debian_slim().pip_install([
     "pydantic",
     "openai"  # For LLM integration
 ])
-
-# Pydantic schema for monitoring plans
-class Plan(BaseModel):
-    metric: str
-    timestamp_col: str
-    group_by: Optional[str] = None
-    method: Literal["zscore", "ewm"] = "zscore"
-    threshold: float = Field(3.0, ge=0)
-    ew_span: int = Field(24, ge=3, le=336)
-    schedule_minutes: int = Field(15, ge=1)
-    action: Literal["slack", "webhook"] = "slack"
-    action_config: Dict[str, Any] = {}
 
 # Simplified LLM Infrastructure using llama.cpp (CPU-only for Phi-4)
 llama_image = (
@@ -128,6 +105,72 @@ def download_model(model_name: str = "phi-4"):
     )
     model_cache.commit()
     print(f"🤖 {model_name} model downloaded successfully!")
+
+@app.function(
+    image=llama_image,
+    volumes={cache_dir: model_cache},
+    timeout=600,
+    secrets=[modal.Secret.from_name("supabase-secret")]
+)
+def analyze_data_with_llm(analysis_prompt: str, model_name: str = "llama3.2"):
+    """Perform comprehensive data analysis using LLM"""
+    import subprocess
+    import json
+    import os
+    
+    cache_dir = "/cache"
+    
+    # Model configurations
+    model_configs = {
+        "llama3.2": {
+            "filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "description": "Llama 3.2 3B Instruct",
+            "context_size": 8192
+        }
+    }
+    
+    model_config = model_configs.get(model_name, model_configs["llama3.2"])
+    
+    try:
+        # Run the model with llama.cpp
+        model_file = f"{cache_dir}/{model_config['filename']}"
+        command = [
+            "/llama.cpp/llama-cli",
+            "--model", model_file,
+            "--prompt", analysis_prompt,
+            "--n-predict", "1000",  # More tokens for comprehensive analysis
+            "--threads", "4",
+            "-no-cnv",
+            "--ctx-size", str(model_config['context_size']),
+            "--temp", "0.3",  # Slightly higher temperature for creative analysis
+        ]
+        
+        print(f"🤖 Running {model_config['description']} for data analysis...")
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode != 0:
+            raise Exception(f"{model_name} failed: {result.stderr}")
+        
+        # Extract JSON from response
+        response_text = result.stdout.strip()
+        print(f"🤖 Raw {model_name} response: {response_text[:300]}...")
+        
+        # Try to find JSON in the response
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
+        
+        if json_start == -1 or json_end == 0:
+            raise ValueError("No JSON found in response")
+        
+        json_text = response_text[json_start:json_end]
+        analysis_result = json.loads(json_text)
+        
+        print(f"✅ {model_name} analysis completed successfully")
+        return json.dumps(analysis_result, indent=2)
+        
+    except Exception as e:
+        print(f"❌ {model_name} analysis failed: {str(e)}")
+        return None
 
 @app.function(
     image=llama_image,
@@ -259,6 +302,19 @@ JSON:"""
         plan_dict = json.loads(json_text)
         
         # Validate with Pydantic
+        from pydantic import BaseModel, Field
+        
+        class Plan(BaseModel):
+            metric: str
+            timestamp_col: str
+            group_by: Optional[str] = None
+            method: Literal["zscore", "ewm"] = "zscore"
+            threshold: float = Field(3.0, ge=0)
+            ew_span: int = Field(24, ge=3, le=336)
+            schedule_minutes: int = Field(15, ge=1)
+            action: Literal["slack", "webhook"] = "slack"
+            action_config: Dict[str, Any] = {}
+        
         plan = Plan(**plan_dict)
         
         # Add Slack webhook if provided
@@ -308,8 +364,11 @@ def create_fallback_plan(schema_info: Dict[str, Any], slack_webhook: Optional[st
     return fallback_plan
 
 @app.function(image=image)
-def fetch_db_data(pg_url: str, sql: str) -> pd.DataFrame:
+def fetch_db_data(pg_url: str, sql: str):
     """Fetch data from Supabase and normalize columns."""
+    import pandas as pd
+    from sqlalchemy import create_engine, text
+    
     try:
         engine = create_engine(pg_url)
         df = pd.read_sql(text(sql), engine)
@@ -330,6 +389,8 @@ def fetch_db_data(pg_url: str, sql: str) -> pd.DataFrame:
 @app.function(image=image)
 def inspect_database(pg_url: str, sql: str) -> Dict[str, Any]:
     """Inspect database schema and data for LLM planning."""
+    import pandas as pd
+    
     try:
         df = fetch_db_data.call(pg_url, sql)
         
@@ -381,8 +442,11 @@ def inspect_database(pg_url: str, sql: str) -> Dict[str, Any]:
         raise
 
 @app.function(image=image)
-def detect_anomalies(df: pd.DataFrame, plan: Dict[str, Any]) -> Dict[str, Any]:
+def detect_anomalies(df, plan: Dict[str, Any]) -> Dict[str, Any]:
     """Detect anomalies using the generated plan."""
+    import pandas as pd
+    import numpy as np
+    
     try:
         # Extract plan parameters
         metric_col = plan["metric"]
