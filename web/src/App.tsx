@@ -1,17 +1,17 @@
 import "./App.css";
 import MVPDemo from "./components/MVPDemo";
 import "./components/MVPDemo.css";
+import { DarkModeProvider } from "./contexts/DarkModeContext";
+import { DarkModeToggle } from "./components/DarkModeToggle";
 
 function App() {
   return (
-    <>
-      <div>
-        <h1>🚀 Sailo MVP Demo</h1>
-        <p>Turn raw database tables into self-running AI pipelines</p>
+    <DarkModeProvider>
+      <div className="app">
+        <DarkModeToggle />
+        <MVPDemo />
       </div>
-
-      <MVPDemo />
-    </>
+    </DarkModeProvider>
   );
 }
 

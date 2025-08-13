@@ -49,13 +49,23 @@ def analyze_with_phi4(analysis_prompt: str) -> str:
         # Use a lightweight but capable model for text generation
         model_name = "microsoft/DialoGPT-small"  # Lightweight conversational model
         
-        # Initialize the text generation pipeline
+        # Generate unique seed for this analysis
+        import hashlib
+        import time
+        import random
+        seed = int(hashlib.md5(f"{analysis_prompt}{time.time()}".encode()).hexdigest()[:8], 16)
+        
+        # Set random seed for reproducible but unique results
+        torch.manual_seed(seed)
+        random.seed(seed)
+        
+        # Initialize the text generation pipeline with higher temperature for variety
         generator = pipeline(
             "text-generation",
             model=model_name,
             tokenizer=model_name,
             max_length=1000,
-            temperature=0.7,
+            temperature=0.8,  # Higher temperature for more varied responses
             do_sample=True,
             pad_token_id=50256
         )
@@ -342,23 +352,32 @@ def extract_json_from_llm_output(llm_output: str) -> Optional[Dict[str, Any]]:
 def universal_phi_analysis(data: list, goal: str, schema_info: Dict[str, Any]) -> Dict[str, Any]:
     """Universal Phi-4 powered data analysis"""
     
+    # Generate unique analysis context
+    import hashlib
+    import time
+    analysis_id = hashlib.md5(f"{goal}{time.time()}".encode()).hexdigest()[:8]
+    
     analysis_prompt = f"""
-You are analyzing a database table to help users understand their data.
+You are analyzing a database table for a specific user request.
 
-GOAL: {goal}
+ANALYSIS ID: {analysis_id}
+SPECIFIC USER GOAL: {goal}
 
 TABLE SCHEMA:
 - Table: {schema_info.get('table', 'unknown')}
 - Columns: {schema_info.get('columns', [])}
 
-SAMPLE DATA (first 5 records):
+SAMPLE DATA ({len(data)} records):
 {json.dumps(data[:5], indent=2, default=str)}
 
-ANALYSIS INSTRUCTIONS:
-1. Examine the data structure and understand what domain/business this represents
-2. Look for patterns, outliers, anomalies, or interesting insights
-3. Consider the user's goal: "{goal}"
-4. Provide specific, actionable recommendations
+CRITICAL INSTRUCTIONS:
+1. This analysis is specifically for: "{goal}"
+2. Generate insights that DIRECTLY match this exact request
+3. If the goal mentions "high volatility", focus on HIGH volatility data points
+4. If the goal mentions "low volatility", focus on LOW volatility data points  
+5. If the goal mentions specific criteria, filter and analyze ONLY data matching those criteria
+6. Provide DIFFERENT results for different goals - do not repeat the same analysis
+7. Use actual values from the provided data to support your findings
 
 Return your analysis in this EXACT JSON format:
 ```json
@@ -486,19 +505,23 @@ def send_slack_alert(webhook_url: str, results: Dict[str, Any], table_name: str)
         return False
 
 # FastAPI web endpoints
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+try:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
 
-web_app = FastAPI(title="Sailo MVP - Phi-4 Data Analysis")
+    web_app = FastAPI(title="Sailo MVP - Phi-4 Data Analysis")
 
-# CORS middleware
-web_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # CORS middleware
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+except ImportError:
+    # Fallback for when FastAPI is not available during import
+    web_app = None
 
 @web_app.get("/health")
 def health_check():

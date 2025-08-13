@@ -66,6 +66,11 @@ def analyze_data_with_llm(analysis_prompt: str, model_name: str = "llama3.2"):
     model_config = model_configs.get(model_name, model_configs["llama3.2"])
     
     try:
+        # Generate unique seed for this analysis
+        import hashlib
+        import time
+        seed = int(hashlib.md5(f"{analysis_prompt}{time.time()}".encode()).hexdigest()[:8], 16)
+        
         # Run the model with llama.cpp
         model_file = f"{cache_dir}/{model_config['filename']}"
         command = [
@@ -76,7 +81,8 @@ def analyze_data_with_llm(analysis_prompt: str, model_name: str = "llama3.2"):
             "--threads", "4",
             "-no-cnv",
             "--ctx-size", str(model_config['context_size']),
-            "--temp", "0.3",  # Slightly higher temperature for creative analysis
+            "--temp", "0.7",  # Higher temperature for more varied responses
+            "--seed", str(seed),  # Unique seed for each analysis
         ]
         
         print(f"🤖 Running {model_config['description']} for data analysis...")
@@ -369,43 +375,58 @@ def run_once(request_data: Dict[str, Any]):
                 "results": None
             }
         
+        # Generate unique analysis context
+        import hashlib
+        import time
+        analysis_id = hashlib.md5(f"{goal}{time.time()}".encode()).hexdigest()[:8]
+        
         # Build analysis prompt based on the plan
         analysis_prompt = f"""
-You are an AI monitoring system. Analyze this data for anomalies and insights.
+You are an AI monitoring system analyzing data for a specific user request. 
 
+ANALYSIS ID: {analysis_id}
 USER GOAL: {goal}
+SPECIFIC REQUEST: "{goal}"
 
 MONITORING PLAN:
-- Metric to monitor: {plan.get('metric', 'volume')}
-- Method: {plan.get('method', 'ai_analysis')}
-- Specific objective: {goal}
+- Primary metric: {plan.get('metric', 'volume')}
+- Analysis method: {plan.get('method', 'ai_analysis')}
+- Table: {table_name}
 
-DATA TO ANALYZE:
+CRITICAL INSTRUCTIONS:
+1. This analysis is specifically for: "{goal}"
+2. Generate insights that DIRECTLY match this exact request
+3. If the goal mentions "high volatility", focus on HIGH volatility stocks/data
+4. If the goal mentions "low volatility", focus on LOW volatility stocks/data  
+5. If the goal mentions specific criteria, filter and analyze ONLY data matching those criteria
+6. Provide DIFFERENT results for different goals - do not repeat the same analysis
+
+DATA TO ANALYZE ({len(sample_data)} records):
 {json.dumps(sample_data, indent=2)}
 
-Instructions:
-1. Analyze the data specifically in the context of this goal: "{goal}"
-2. Focus on the specified metric: {plan.get('metric', 'volume')}
-3. Look for patterns, anomalies, or insights that are relevant to: "{goal}"
-4. Provide actionable insights that directly address the user's goal
+ANALYSIS REQUIREMENTS:
+- Focus ONLY on data that matches the user's specific goal: "{goal}"
+- Generate unique insights based on the actual request
+- Provide different recommendations for different goals
+- Be specific about WHY each finding matches the user's request
 
 Return your analysis in this JSON format:
 
 {{
-    "summary": "Brief analysis summary",
+    "summary": "Analysis summary specifically addressing: {goal}",
     "total_anomalies": <number>,
     "anomalies": [
         {{
-            "symbol": "Data identifier",
-            "value": "Specific values found",
+            "symbol": "Specific data identifier",
+            "value": "Actual values from data",
             "severity": "HIGH/MEDIUM/LOW",
-            "details": "What makes this worth alerting about",
-            "action_required": "Recommended action",
-            "reason": "Why this is significant"
+            "details": "Why this matches the goal: {goal}",
+            "action_required": "Specific action for this goal",
+            "reason": "How this directly addresses: {goal}"
         }}
     ],
     "should_alert": true/false,
-    "alert_message": "Message to send to Slack if alerting"
+    "alert_message": "Alert message for: {goal}"
 }}
 """
         

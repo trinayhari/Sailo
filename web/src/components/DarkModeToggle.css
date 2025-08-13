@@ -1,0 +1,110 @@
+.dark-mode-toggle {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 24px;
+  transition: all 0.3s ease;
+}
+
+.dark-mode-toggle:hover {
+  transform: scale(1.05);
+}
+
+.dark-mode-toggle:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+.toggle-track {
+  width: 60px;
+  height: 30px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 15px;
+  position: relative;
+  box-shadow: 
+    inset 0 2px 4px rgba(0, 0, 0, 0.1),
+    0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: all 0.3s ease;
+}
+
+.dark-mode-toggle:hover .toggle-track {
+  box-shadow: 
+    inset 0 2px 4px rgba(0, 0, 0, 0.15),
+    0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-thumb {
+  width: 26px;
+  height: 26px;
+  background: white;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.toggle-thumb.light {
+  left: 2px;
+  background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+}
+
+.toggle-thumb.dark {
+  left: 32px;
+  background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%);
+}
+
+.toggle-icon {
+  font-size: 14px;
+  line-height: 1;
+  transition: all 0.2s ease;
+}
+
+.toggle-thumb.light .toggle-icon {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.1));
+}
+
+.toggle-thumb.dark .toggle-icon {
+  filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.1));
+}
+
+/* Dark mode track styling */
+:root.dark-mode .toggle-track {
+  background: linear-gradient(135deg, #4c51bf 0%, #553c9a 100%);
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .dark-mode-toggle {
+    top: 15px;
+    right: 15px;
+  }
+  
+  .toggle-track {
+    width: 50px;
+    height: 26px;
+    border-radius: 13px;
+  }
+  
+  .toggle-thumb {
+    width: 22px;
+    height: 22px;
+    top: 2px;
+  }
+  
+  .toggle-thumb.dark {
+    left: 26px;
+  }
+  
+  .toggle-icon {
+    font-size: 12px;
+  }
+}

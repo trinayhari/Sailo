@@ -62,8 +62,9 @@ export function MVPDemo() {
 
   // User inputs
   const [goal, setGoal] = useState(
-    "analyze my data for insights and anomalies"
+    "Find profitable investment opportunities in our trading data"
   );
+  const [tableName, setTableName] = useState("options_trades");
   const [slackWebhook, setSlackWebhook] = useState("");
 
   const BASE_URL = "https://sailo--sailo-mvp-fastapi-app.modal.run";
@@ -76,7 +77,7 @@ export function MVPDemo() {
       const response = await fetch(`${BASE_URL}/inspect-source`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table_name: "options_trades" }),
+        body: JSON.stringify({ table_name: tableName }),
       });
 
       if (!response.ok) {
@@ -146,7 +147,7 @@ export function MVPDemo() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           plan,
-          table_name: "options_trades",
+          table_name: tableName,
           goal: goal,
         }),
       });
@@ -224,6 +225,17 @@ export function MVPDemo() {
         <h3>🎯 Analysis Goal</h3>
         <div className="input-group">
           <label>
+            Database Table Name:
+            <input
+              type="text"
+              value={tableName}
+              onChange={(e) => setTableName(e.target.value)}
+              placeholder="Enter table name (e.g., options_trades, sales_data, user_activity)"
+              disabled={step !== "start"}
+              className="demo-input"
+            />
+          </label>
+          <label>
             What would you like to analyze?
             <textarea
               value={goal}
@@ -231,6 +243,7 @@ export function MVPDemo() {
               placeholder="Describe what you want to analyze or monitor in your data..."
               disabled={step !== "start"}
               rows={3}
+              className="demo-input"
             />
           </label>
           <small>
