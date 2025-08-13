@@ -13,12 +13,13 @@ image = modal.Image.debian_slim().pip_install([
     "pandas",
     "numpy", 
     "sqlalchemy",
-    "psycopg[binary]",
+    "psycopg2-binary",
     "matplotlib",
     "requests",
     "pydantic",
     "openai",
-    "python-dotenv"
+    "python-dotenv",
+    "slack-sdk"
 ])
 
 # Pydantic schema for monitoring plans
@@ -32,6 +33,94 @@ class Plan(BaseModel):
     schedule_minutes: int = Field(15, ge=1)
     action: Literal["slack", "webhook"] = "slack"
     action_config: Dict[str, Any] = {}
+
+# Slack notification configuration
+class SlackConfig(BaseModel):
+    webhook_url: Optional[str] = None
+    bot_token: Optional[str] = None
+    channel: str = "#alerts"
+    username: str = "Anomaly Bot"
+
+@app.function(image=image)
+def send_slack_notification(
+    message: str, 
+    webhook_url: Optional[str] = None,
+    bot_token: Optional[str] = None,
+    channel: str = "#alerts",
+    username: str = "Anomaly Bot"
+) -> Dict[str, Any]:
+    """Send a notification to Slack using webhook or bot token"""
+    import requests
+    import json
+    
+    try:
+        if webhook_url:
+            # Use webhook method (simpler, no bot setup required)
+            payload = {
+                "text": message,
+                "username": username,
+                "channel": channel,
+                "icon_emoji": ":warning:"
+            }
+            
+            response = requests.post(
+                webhook_url,
+                data=json.dumps(payload),
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            if response.status_code == 200:
+                return {
+                    "status": "success",
+                    "method": "webhook",
+                    "message": "Slack notification sent successfully"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "method": "webhook",
+                    "error": f"Webhook request failed: {response.status_code} - {response.text}"
+                }
+                
+        elif bot_token:
+            # Use Slack SDK with bot token (more features, requires bot setup)
+            from slack_sdk import WebClient
+            from slack_sdk.errors import SlackApiError
+            
+            client = WebClient(token=bot_token)
+            
+            try:
+                response = client.chat_postMessage(
+                    channel=channel,
+                    text=message,
+                    username=username,
+                    icon_emoji=":warning:"
+                )
+                
+                return {
+                    "status": "success",
+                    "method": "bot_token",
+                    "message": "Slack notification sent successfully",
+                    "ts": response["ts"]
+                }
+                
+            except SlackApiError as e:
+                return {
+                    "status": "error",
+                    "method": "bot_token",
+                    "error": f"Slack API error: {e.response['error']}"
+                }
+        else:
+            return {
+                "status": "error",
+                "error": "No webhook_url or bot_token provided"
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Unexpected error: {str(e)}"
+        }
 
 @app.function(image=image)
 def test_supabase_connection(supabase_url: str, supabase_key: str) -> Dict[str, Any]:
@@ -144,7 +233,15 @@ def fetch_options_data(supabase_url: str, supabase_key: str, limit: int = 10) ->
         }
 
 @app.function(image=image)
-def simple_anomaly_detection(supabase_url: str, supabase_key: str, metric: str = "implied_volatility") -> Dict[str, Any]:
+def simple_anomaly_detection(
+    supabase_url: str, 
+    supabase_key: str, 
+    metric: str = "implied_volatility",
+    slack_webhook_url: Optional[str] = None,
+    slack_bot_token: Optional[str] = None,
+    slack_channel: str = "#alerts",
+    send_slack_notifications: bool = False
+) -> Dict[str, Any]:
     """Simple anomaly detection on options trading data"""
     import pandas as pd
     import numpy as np
@@ -207,13 +304,53 @@ def simple_anomaly_detection(supabase_url: str, supabase_key: str, metric: str =
             'threshold_used': 2.0
         }
         
-        return {
+        # Send Slack notification if anomalies found and Slack is configured
+        slack_result = None
+        if send_slack_notifications and len(anomalies) > 0 and (slack_webhook_url or slack_bot_token):
+            # Create a formatted message for Slack
+            slack_message = f"""🚨 *Anomaly Alert* 🚨
+            
+*Metric:* {metric}
+*Anomalies Found:* {len(anomalies)} out of {len(df)} records
+*Threshold:* Z-score > 2.0
+
+*Top Anomalies:*"""
+            
+            for i, anomaly in enumerate(anomaly_records[:5], 1):  # Show top 5 in Slack
+                slack_message += f"\n{i}. *{anomaly['symbol']}* - Value: {anomaly['metric_value']:.4f} (Z-score: {anomaly['z_score']:.2f})"
+            
+            if len(anomaly_records) > 5:
+                slack_message += f"\n... and {len(anomaly_records) - 5} more anomalies"
+            
+            slack_message += f"\n\n_Analysis completed at {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}_"
+            
+            # Send the Slack notification
+            try:
+                slack_result = send_slack_notification.remote(
+                    message=slack_message,
+                    webhook_url=slack_webhook_url,
+                    bot_token=slack_bot_token,
+                    channel=slack_channel
+                )
+            except Exception as slack_error:
+                slack_result = {
+                    "status": "error",
+                    "error": f"Failed to send Slack notification: {str(slack_error)}"
+                }
+
+        result = {
             "status": "success",
             "metric_analyzed": metric,
             "statistics": stats,
             "anomalies": anomaly_records[:10],  # Return top 10 anomalies
             "summary": f"Found {len(anomalies)} anomalies in {metric} out of {len(df)} records"
         }
+        
+        # Add Slack notification result if attempted
+        if slack_result is not None:
+            result["slack_notification"] = slack_result
+            
+        return result
         
     except Exception as e:
         return {
@@ -281,6 +418,106 @@ def test_anomaly_detection(metric: str = "implied_volatility"):
         print(f"   • Anomalies found: {stats['anomalies_found']}")
         print(f"   • Mean {metric}: {stats['metric_mean']:.4f}")
         print(f"   • Std {metric}: {stats['metric_std']:.4f}")
+        
+        if result['anomalies']:
+            print(f"\n🚨 Anomalies detected:")
+            for i, anomaly in enumerate(result['anomalies'], 1):
+                print(f"   {i}. {anomaly['symbol']} at {anomaly['timestamp']}")
+                print(f"      Value: {anomaly['metric_value']:.4f} (z-score: {anomaly['z_score']:.2f})")
+    else:
+        print(f"❌ Analysis failed: {result['error']}")
+    
+    return result
+
+@app.local_entrypoint()
+def test_slack_integration(webhook_url: str = None, bot_token: str = None, channel: str = "#alerts"):
+    """Test Slack integration with a sample message"""
+    import pandas as pd
+    
+    if not webhook_url and not bot_token:
+        print("❌ Please provide either webhook_url or bot_token")
+        print("Usage examples:")
+        print("  modal run modal_app_fixed.py::test_slack_integration --webhook-url https://hooks.slack.com/services/...")
+        print("  modal run modal_app_fixed.py::test_slack_integration --bot-token xoxb-...")
+        return {"status": "error", "error": "No Slack credentials provided"}
+    
+    print("🧪 Testing Slack integration...")
+    
+    test_message = """🧪 *Slack Integration Test* 🧪
+
+This is a test message from your anomaly detection system!
+
+*Test Details:*
+• Function: Slack API Integration
+• Status: Testing connectivity
+• Time: """ + pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S') + """
+
+If you see this message, your Slack integration is working correctly! 🎉"""
+
+    try:
+        result = send_slack_notification.remote(
+            message=test_message,
+            webhook_url=webhook_url,
+            bot_token=bot_token,
+            channel=channel,
+            username="Test Bot"
+        )
+        
+        if result["status"] == "success":
+            print(f"✅ Slack test message sent successfully via {result['method']}!")
+            print(f"📱 Check your {channel} channel for the test message")
+        else:
+            print(f"❌ Slack test failed: {result['error']}")
+            
+        return result
+        
+    except Exception as e:
+        print(f"❌ Slack test failed with exception: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
+@app.local_entrypoint() 
+def test_anomaly_with_slack(
+    metric: str = "implied_volatility",
+    webhook_url: str = None,
+    bot_token: str = None,
+    channel: str = "#alerts"
+):
+    """Test anomaly detection with Slack notifications enabled"""
+    supabase_url = "https://xcwdavnejsnkddaroaaf.supabase.co"
+    supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhjd2Rhdm5lanNua2RkYXJvYWFmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUwNTY1MDQsImV4cCI6MjA3MDYzMjUwNH0.2q_9k1D26H9EFh2OBdEqVnqnMAEGHcErEFz36n9TgVY"
+    
+    if not webhook_url and not bot_token:
+        print("⚠️  No Slack credentials provided - running anomaly detection without notifications")
+        send_notifications = False
+    else:
+        print("🚀 Running anomaly detection with Slack notifications enabled...")
+        send_notifications = True
+    
+    result = simple_anomaly_detection.remote(
+        supabase_url=supabase_url,
+        supabase_key=supabase_key,
+        metric=metric,
+        slack_webhook_url=webhook_url,
+        slack_bot_token=bot_token,
+        slack_channel=channel,
+        send_slack_notifications=send_notifications
+    )
+    
+    if result["status"] == "success":
+        print(f"✅ Analysis complete: {result['summary']}")
+        print(f"📊 Statistics:")
+        stats = result['statistics']
+        print(f"   • Total records: {stats['total_records']}")
+        print(f"   • Anomalies found: {stats['anomalies_found']}")
+        print(f"   • Mean {metric}: {stats['metric_mean']:.4f}")
+        print(f"   • Std {metric}: {stats['metric_std']:.4f}")
+        
+        if 'slack_notification' in result:
+            slack_result = result['slack_notification']
+            if slack_result['status'] == 'success':
+                print(f"📱 Slack notification sent successfully!")
+            else:
+                print(f"❌ Slack notification failed: {slack_result['error']}")
         
         if result['anomalies']:
             print(f"\n🚨 Anomalies detected:")
