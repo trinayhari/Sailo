@@ -10,3 +10,4 @@ matplotlib
 pydantic
 requests
 typing-extensions
+slack-sdk
