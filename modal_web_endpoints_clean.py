@@ -354,8 +354,10 @@ def run_once(request_data: Dict[str, Any]):
     try:
         plan = request_data.get("plan", {})
         table_name = request_data.get("table_name", "options_trades")
+        goal = request_data.get("goal", "detect anomalies and alert team")
         
         print(f"🚀 Running monitoring pipeline once for table: {table_name}")
+        print(f"🎯 User goal: {goal}")
         
         # Fetch data for analysis
         sample_data = fetch_supabase_data.remote(table_name, 20)
@@ -371,18 +373,21 @@ def run_once(request_data: Dict[str, Any]):
         analysis_prompt = f"""
 You are an AI monitoring system. Analyze this data for anomalies and insights.
 
+USER GOAL: {goal}
+
 MONITORING PLAN:
 - Metric to monitor: {plan.get('metric', 'volume')}
 - Method: {plan.get('method', 'ai_analysis')}
-- Goal: Detect patterns worth alerting about
+- Specific objective: {goal}
 
 DATA TO ANALYZE:
 {json.dumps(sample_data, indent=2)}
 
 Instructions:
-1. Look for any unusual patterns, spikes, or anomalies in the data
+1. Analyze the data specifically in the context of this goal: "{goal}"
 2. Focus on the specified metric: {plan.get('metric', 'volume')}
-3. Provide actionable insights
+3. Look for patterns, anomalies, or insights that are relevant to: "{goal}"
+4. Provide actionable insights that directly address the user's goal
 
 Return your analysis in this JSON format:
 

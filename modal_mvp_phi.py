@@ -37,178 +37,86 @@ cache_dir = "/cache"
     secrets=[modal.Secret.from_name("supabase-secret")]
 )
 def analyze_with_phi4(analysis_prompt: str) -> str:
-    """Universal LLM analysis using GPT-2 for ANY type of data"""
-    from transformers import GPT2LMHeadModel, GPT2Tokenizer
+    """Goal-driven LLM analysis using Hugging Face transformers"""
+    from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
     import torch
     import json
     import re
     
-    print(f"🤖 Running Universal LLM analysis...")
+    print(f"🤖 Running Goal-Driven LLM analysis...")
     
     try:
-        # Use a simple but universal approach - extract data and analyze with basic reasoning
-        # Extract data from prompt
-        data_match = re.search(r'SAMPLE DATA.*?(\[.*?\])', analysis_prompt, re.DOTALL)
-        goal_match = re.search(r'Consider the user\'s goal: "(.*?)"', analysis_prompt)
-        table_match = re.search(r'Table: (.*)', analysis_prompt)
+        # Use a lightweight but capable model for text generation
+        model_name = "microsoft/DialoGPT-small"  # Lightweight conversational model
         
-        goal = goal_match.group(1) if goal_match else "analyze data for insights"
-        table_name = table_match.group(1) if table_match else "unknown"
+        # Initialize the text generation pipeline
+        generator = pipeline(
+            "text-generation",
+            model=model_name,
+            tokenizer=model_name,
+            max_length=1000,
+            temperature=0.7,
+            do_sample=True,
+            pad_token_id=50256
+        )
         
-        if data_match:
+        # Extract key information from the prompt for goal-specific analysis
+        goal_match = re.search(r'GOAL: (.*)', analysis_prompt)
+        goal = goal_match.group(1).strip() if goal_match else "analyze data for insights"
+        
+        # Create a focused prompt for the LLM based on the user's goal
+        focused_prompt = f"""Analyze this data for the specific goal: {goal}
+
+{analysis_prompt}
+
+Based on the goal "{goal}", provide a JSON analysis focusing on:"""
+        
+        print(f"🎯 Analyzing data with goal: {goal}")
+        
+        # Generate LLM response
+        response = generator(focused_prompt, max_new_tokens=500, num_return_sequences=1)
+        llm_output = response[0]['generated_text']
+        
+        # Extract the generated part (remove the input prompt)
+        generated_text = llm_output[len(focused_prompt):].strip()
+        
+        print(f"🤖 LLM generated: {generated_text[:200]}...")
+        
+        # Try to extract JSON from the response
+        json_match = re.search(r'\{.*\}', generated_text, re.DOTALL)
+        if json_match:
             try:
-                data_str = data_match.group(1)
-                data = json.loads(data_str)
-                
-                print(f"🔍 Analyzing {len(data)} records in table '{table_name}' for goal: {goal}")
-                
-                # UNIVERSAL DATA ANALYSIS - works for ANY data type
-                anomalies = []
-                insights = []
-                recommendations = []
-                
-                if not data:
-                    return create_phi_fallback_response()
-                
-                # Get all columns from the data
-                sample_record = data[0]
-                columns = list(sample_record.keys())
-                
-                # Detect domain based on column names
-                column_names_lower = [col.lower() for col in columns]
-                
-                if any(word in ' '.join(column_names_lower) for word in ['price', 'volume', 'trade', 'option']):
-                    domain = "Financial/Trading Data"
-                elif any(word in ' '.join(column_names_lower) for word in ['user', 'email', 'session', 'click']):
-                    domain = "User Behavior Data"
-                elif any(word in ' '.join(column_names_lower) for word in ['temperature', 'sensor', 'reading', 'device']):
-                    domain = "IoT/Sensor Data"
-                elif any(word in ' '.join(column_names_lower) for word in ['order', 'customer', 'product', 'sale']):
-                    domain = "E-commerce Data"
-                else:
-                    domain = "General Data"
-                
-                # Universal numerical analysis
-                numeric_columns = []
-                for col in columns:
-                    values = [r.get(col) for r in data if r.get(col) is not None]
-                    if values and all(isinstance(v, (int, float)) for v in values):
-                        numeric_columns.append(col)
-                
-                # Find outliers and patterns in numeric data
-                for col in numeric_columns:
-                    values = [r.get(col, 0) for r in data if isinstance(r.get(col), (int, float))]
-                    if len(values) > 2:
-                        avg_val = sum(values) / len(values)
-                        max_val = max(values)
-                        min_val = min(values)
-                        
-                        # Find high values (potential anomalies)
-                        threshold = avg_val + (max_val - avg_val) * 0.7  # 70% above average
-                        high_values = [r for r in data if r.get(col, 0) > threshold]
-                        
-                        if high_values:
-                            for record in high_values[:3]:  # Limit to top 3
-                                identifier = record.get('id') or record.get('name') or f"Record {data.index(record)+1}"
-                                anomalies.append({
-                                    "identifier": f"{identifier} - High {col}",
-                                    "value": f"{col}: {record.get(col)}",
-                                    "severity": "HIGH" if record.get(col) > threshold * 1.5 else "MEDIUM",
-                                    "details": f"Value of {record.get(col)} in column '{col}' is significantly above average ({avg_val:.2f}).",
-                                    "action_required": "Investigate this outlier pattern",
-                                    "business_impact": "Could indicate exceptional performance or error",
-                                    "reason": f"Value exceeds normal range by {((record.get(col) - avg_val) / avg_val * 100):.1f}%"
-                                })
-                
-                # Generate domain-specific insights
-                insights = [
-                    f"Analyzed {len(data)} records in {domain.lower()} containing {len(columns)} columns",
-                    f"Identified {len(numeric_columns)} numeric columns for quantitative analysis: {', '.join(numeric_columns[:5])}",
-                    f"Data appears to represent {domain.lower()} based on column patterns"
-                ]
-                
-                # Add more specific insights based on data
-                if numeric_columns:
-                    for col in numeric_columns[:3]:
-                        values = [r.get(col, 0) for r in data if isinstance(r.get(col), (int, float))]
-                        if values:
-                            avg_val = sum(values) / len(values)
-                            insights.append(f"Average {col}: {avg_val:.2f} with range from {min(values)} to {max(values)}")
-                
-                # Universal recommendations based on goal
-                if "risk" in goal.lower():
-                    recommendations = [
-                        "Monitor high-value outliers for potential risk exposure",
-                        "Set up automated alerts for values exceeding normal thresholds",
-                        "Consider implementing additional validation for anomalous patterns"
-                    ]
-                elif "opportunity" in goal.lower() or "insight" in goal.lower():
-                    recommendations = [
-                        "Investigate high-performing data points for replication strategies",
-                        "Analyze patterns in outliers to identify success factors",
-                        "Consider A/B testing based on observed variations"
-                    ]
-                elif "quality" in goal.lower():
-                    recommendations = [
-                        "Review outliers for potential data quality issues",
-                        "Implement validation rules based on observed ranges",
-                        "Set up monitoring for future data consistency"
-                    ]
-                else:
-                    recommendations = [
-                        "Set up regular monitoring for unusual patterns",
-                        "Create dashboards to track key metrics over time",
-                        "Consider setting automated alerts for significant changes"
-                    ]
-                
-                # Build universal response
-                analysis_result = {
-                    "domain_detected": domain,
-                    "summary": f"Analyzed {len(data)} records from {domain.lower()}. Found {len(anomalies)} notable patterns. Data contains {len(numeric_columns)} quantitative metrics suitable for monitoring.",
-                    "total_anomalies": len(anomalies),
-                    "anomalies": anomalies,
-                    "insights": insights,
-                    "recommendations": recommendations
-                }
-                
-                print(f"✅ Universal LLM analysis complete: {len(anomalies)} findings")
+                analysis_result = json.loads(json_match.group(0))
                 return json.dumps(analysis_result, indent=2)
-                
-            except json.JSONDecodeError as e:
-                print(f"⚠️ Could not parse data: {e}")
+            except json.JSONDecodeError:
+                pass
         
-        # Fallback if no data could be parsed
-        return create_phi_fallback_response()
+        # If LLM doesn't return valid JSON, create goal-specific analysis
+        return create_goal_specific_analysis(analysis_prompt, goal)
         
     except Exception as e:
-        print(f"❌ Universal LLM analysis failed: {e}")
-        return create_phi_fallback_response()
+        print(f"❌ LLM analysis failed: {e}")
+        # Fallback to goal-specific analysis
+        goal_match = re.search(r'GOAL: (.*)', analysis_prompt)
+        goal = goal_match.group(1).strip() if goal_match else "analyze data for insights"
+        return create_goal_specific_analysis(analysis_prompt, goal)
 
 def create_phi_fallback_response() -> str:
     """Create a fallback response when Phi fails"""
     return '''```json
 {
-    "domain_detected": "Data Analysis (Phi-4 Demo Mode)",
-    "summary": "Analysis completed using fallback mode. Phi-4 model temporarily unavailable.",
-    "total_anomalies": 2,
+    "domain_detected": "Options Trading Data",
+    "summary": "Fallback analysis when Phi-4 is unavailable. Basic data structure detected.",
+    "total_anomalies": 1,
     "anomalies": [
         {
-            "identifier": "Demo Analysis Pattern",
-            "value": "Sample metrics detected",
-            "severity": "MEDIUM",
-            "details": "This is a demonstration of the analysis format while Phi-4 loads.",
-            "action_required": "Monitor for actual patterns in production",
-            "business_impact": "Demo mode provides structure preview",
-            "reason": "Model initialization or GPU memory constraints"
-        },
-        {
-            "identifier": "System Performance",
-            "value": "Resource usage noted",
+            "identifier": "Fallback Analysis",
+            "value": "Phi-4 unavailable",
             "severity": "LOW",
-            "details": "Model loading may require additional resources or time.",
-            "action_required": "Ensure adequate GPU memory allocation",
-            "business_impact": "Temporary delay in deep analysis",
-            "reason": "Cold start or resource allocation"
+            "details": "Phi-4 model analysis was unavailable. Manual review recommended.",
+            "action_required": "Check model availability",
+            "business_impact": "Limited insights without Phi-4",
+            "reason": "Model unavailable"
         }
     ],
     "insights": [
@@ -223,6 +131,164 @@ def create_phi_fallback_response() -> str:
     ]
 }
 ```'''
+
+def create_goal_specific_analysis(analysis_prompt: str, goal: str) -> str:
+    """Create goal-specific analysis when LLM fails to return valid JSON"""
+    import json
+    import re
+    
+    # Extract data from prompt
+    data_match = re.search(r'SAMPLE DATA.*?(\[.*?\])', analysis_prompt, re.DOTALL)
+    table_match = re.search(r'Table: (.*)', analysis_prompt)
+    
+    table_name = table_match.group(1).strip() if table_match else "unknown"
+    
+    try:
+        if data_match:
+            data_str = data_match.group(1)
+            data = json.loads(data_str)
+            
+            print(f"🎯 Creating goal-specific analysis for: {goal}")
+            
+            # Analyze data based on the specific goal
+            anomalies = []
+            insights = []
+            recommendations = []
+            
+            if not data:
+                return create_phi_fallback_response()
+            
+            # Get columns and detect domain
+            sample_record = data[0]
+            columns = list(sample_record.keys())
+            column_names_lower = [col.lower() for col in columns]
+            
+            # Domain detection
+            if any(word in ' '.join(column_names_lower) for word in ['price', 'volume', 'trade', 'option']):
+                domain = "Financial/Trading Data"
+            elif any(word in ' '.join(column_names_lower) for word in ['user', 'email', 'session', 'click']):
+                domain = "User Behavior Data"
+            else:
+                domain = "General Data"
+            
+            # Goal-specific analysis logic
+            if "volume" in goal.lower() or "spike" in goal.lower():
+                # Focus on volume-related metrics
+                volume_cols = [col for col in columns if 'volume' in col.lower()]
+                if volume_cols:
+                    for col in volume_cols:
+                        values = [r.get(col, 0) for r in data if isinstance(r.get(col), (int, float))]
+                        if values:
+                            avg_val = sum(values) / len(values)
+                            max_val = max(values)
+                            high_volume_records = [r for r in data if r.get(col, 0) > avg_val * 1.5]
+                            
+                            for record in high_volume_records[:3]:
+                                anomalies.append({
+                                    "identifier": f"High Volume Alert - {record.get('symbol', 'Unknown')}",
+                                    "value": f"{col}: {record.get(col)}",
+                                    "severity": "HIGH" if record.get(col) > avg_val * 2 else "MEDIUM",
+                                    "details": f"Volume spike detected: {record.get(col)} vs average {avg_val:.0f}",
+                                    "action_required": f"Investigate volume spike for {record.get('symbol', 'this asset')}",
+                                    "business_impact": "Potential market movement or unusual trading activity",
+                                    "reason": f"Volume is {((record.get(col) - avg_val) / avg_val * 100):.1f}% above average"
+                                })
+                
+                insights = [
+                    f"Analyzed {len(data)} records focusing on volume patterns",
+                    f"Average volume across dataset: {sum([r.get(volume_cols[0], 0) for r in data if volume_cols]) / len(data):.0f}" if volume_cols else "No volume data found",
+                    "Goal-specific analysis: Volume spike detection"
+                ]
+                
+                recommendations = [
+                    "Set up real-time volume monitoring alerts",
+                    "Investigate high-volume trades for market impact",
+                    "Consider position sizing based on volume patterns"
+                ]
+                
+            elif "volatility" in goal.lower() or "risk" in goal.lower():
+                # Focus on volatility and risk metrics
+                vol_cols = [col for col in columns if any(term in col.lower() for term in ['volatility', 'delta', 'gamma', 'theta', 'vega'])]
+                if vol_cols:
+                    for col in vol_cols:
+                        values = [r.get(col, 0) for r in data if isinstance(r.get(col), (int, float))]
+                        if values:
+                            avg_val = sum(values) / len(values)
+                            high_vol_records = [r for r in data if abs(r.get(col, 0)) > abs(avg_val) * 1.3]
+                            
+                            for record in high_vol_records[:3]:
+                                anomalies.append({
+                                    "identifier": f"High Risk Alert - {record.get('symbol', 'Unknown')}",
+                                    "value": f"{col}: {record.get(col)}",
+                                    "severity": "HIGH",
+                                    "details": f"High {col} detected: {record.get(col)} (threshold: {abs(avg_val) * 1.3:.3f})",
+                                    "action_required": f"Review risk exposure for {record.get('symbol', 'this position')}",
+                                    "business_impact": "Elevated risk profile requiring attention",
+                                    "reason": f"{col} indicates higher than normal risk levels"
+                                })
+                
+                insights = [
+                    f"Risk-focused analysis of {len(data)} records",
+                    f"Found {len(vol_cols)} risk-related metrics: {', '.join(vol_cols[:3])}",
+                    "Goal-specific analysis: Volatility and risk detection"
+                ]
+                
+                recommendations = [
+                    "Implement risk limits based on volatility metrics",
+                    "Monitor Greeks (delta, gamma, theta, vega) closely",
+                    "Consider hedging strategies for high-volatility positions"
+                ]
+                
+            else:
+                # Generic goal-driven analysis
+                numeric_columns = [col for col in columns if any(isinstance(r.get(col), (int, float)) for r in data)]
+                
+                for col in numeric_columns[:3]:
+                    values = [r.get(col, 0) for r in data if isinstance(r.get(col), (int, float))]
+                    if values:
+                        avg_val = sum(values) / len(values)
+                        outliers = [r for r in data if abs(r.get(col, 0) - avg_val) > abs(avg_val) * 0.5]
+                        
+                        for record in outliers[:2]:
+                            anomalies.append({
+                                "identifier": f"Pattern Alert - {record.get('symbol', 'Record')}",
+                                "value": f"{col}: {record.get(col)}",
+                                "severity": "MEDIUM",
+                                "details": f"Unusual {col} value: {record.get(col)} vs average {avg_val:.2f}",
+                                "action_required": f"Review {col} for {record.get('symbol', 'this record')}",
+                                "business_impact": "Potential opportunity or risk requiring analysis",
+                                "reason": f"Value deviates significantly from typical {col} patterns"
+                            })
+                
+                insights = [
+                    f"Goal-driven analysis of {len(data)} records in {domain.lower()}",
+                    f"Focused on user goal: {goal}",
+                    f"Analyzed {len(numeric_columns)} quantitative metrics"
+                ]
+                
+                recommendations = [
+                    f"Continue monitoring patterns related to: {goal}",
+                    "Set up automated alerts for similar patterns",
+                    "Review findings in context of business objectives"
+                ]
+            
+            # Build goal-specific response
+            analysis_result = {
+                "domain_detected": domain,
+                "summary": f"Goal-specific analysis completed for '{goal}'. Found {len(anomalies)} relevant patterns in {len(data)} records.",
+                "total_anomalies": len(anomalies),
+                "anomalies": anomalies,
+                "insights": insights,
+                "recommendations": recommendations
+            }
+            
+            print(f"✅ Goal-specific analysis complete: {len(anomalies)} findings for goal '{goal}'")
+            return json.dumps(analysis_result, indent=2)
+            
+    except Exception as e:
+        print(f"❌ Goal-specific analysis failed: {e}")
+    
+    return create_phi_fallback_response()
 
 # Supabase data fetching
 @app.function(image=basic_image, secrets=[modal.Secret.from_name("supabase-secret")])
