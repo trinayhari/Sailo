@@ -1,13 +1,5 @@
 modal
-fastapi
-uvicorn
-python-dotenv
 pandas
 numpy
-sqlalchemy
-psycopg[binary]
-matplotlib
-pydantic
 requests
-typing-extensions
-slack-sdk
+supabase

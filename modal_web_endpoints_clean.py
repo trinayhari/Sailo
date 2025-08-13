@@ -202,9 +202,283 @@ def fetch_supabase_data(table_name: str, limit: int = 5):
         print(f"❌ Error fetching data from {table_name}: {e}")
         return []
 
+# MVP Endpoints for the 3-button demo: Inspect -> Auto-Plan -> Run Once
+
+@modal.web_endpoint(method="POST")
+def inspect_source(request_data: Dict[str, Any]):
+    """Inspect database source - returns schema info, stats, and sample data"""
+    try:
+        table_name = request_data.get("table_name", "options_trades")
+        
+        print(f"🔍 Inspecting table: {table_name}")
+        
+        # Fetch sample data
+        sample_data = fetch_supabase_data.remote(table_name, 10)
+        
+        if not sample_data:
+            return {
+                "success": False,
+                "error": f"No data available in table {table_name}",
+                "inspection": None
+            }
+        
+        # Analyze columns and data types
+        columns = list(sample_data[0].keys()) if sample_data else []
+        numeric_columns = []
+        datetime_columns = []
+        
+        for col in columns:
+            sample_val = sample_data[0].get(col) if sample_data else None
+            if isinstance(sample_val, (int, float)):
+                numeric_columns.append(col)
+            elif 'time' in col.lower() or 'date' in col.lower() or col in ['created_at', 'trade_timestamp']:
+                datetime_columns.append(col)
+        
+        inspection_result = {
+            "table": table_name,
+            "total_records": len(sample_data),
+            "total_columns": len(columns),
+            "columns": {
+                "all": columns,
+                "numeric": numeric_columns,
+                "datetime": datetime_columns
+            },
+            "sample_data": sample_data[:5],  # First 5 records for preview
+            "stats": f"Found {len(sample_data)} records with {len(columns)} columns"
+        }
+        
+        return {
+            "success": True,
+            "inspection": inspection_result
+        }
+        
+    except Exception as e:
+        print(f"❌ Inspection failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "inspection": None
+        }
+
+@modal.web_endpoint(method="POST") 
+def auto_plan(request_data: Dict[str, Any]):
+    """Auto-generate monitoring plan using AI"""
+    try:
+        goal = request_data.get("goal", "detect anomalies and alert team")
+        inspection_data = request_data.get("inspection_data", {})
+        slack_webhook = request_data.get("slack_webhook")
+        
+        print(f"🤖 Auto-planning for goal: {goal}")
+        
+        # Create a plan prompt for the LLM
+        plan_prompt = f"""
+You are an AI that creates monitoring plans for database tables. 
+
+GOAL: {goal}
+
+TABLE INFO:
+- Table: {inspection_data.get('table', 'options_trades')}
+- Columns: {inspection_data.get('columns', {}).get('all', [])}
+- Numeric columns: {inspection_data.get('columns', {}).get('numeric', [])}
+- Datetime columns: {inspection_data.get('columns', {}).get('datetime', [])}
+
+SAMPLE DATA:
+{json.dumps(inspection_data.get('sample_data', [])[:3], indent=2)}
+
+Create a monitoring plan in this EXACT JSON format:
+
+{{
+    "metric": "column_name_to_monitor",
+    "timestamp_col": "timestamp_column_name", 
+    "method": "ai_analysis",
+    "threshold": "ai_determined",
+    "schedule_minutes": 15,
+    "action": "slack",
+    "action_config": {{"webhook_url": "{slack_webhook if slack_webhook else 'not_provided'}"}}
+}}
+
+Choose the most relevant numeric column for monitoring based on the goal and sample data.
+"""
+        
+        # Get AI-generated plan
+        llm_result = analyze_data_with_llm.remote(plan_prompt)
+        
+        if llm_result:
+            try:
+                # Try to parse the LLM response as JSON
+                plan = json.loads(llm_result)
+                
+                # Validate the plan has required fields
+                if not plan.get("metric") or not plan.get("timestamp_col"):
+                    raise ValueError("Invalid plan structure")
+                    
+            except (json.JSONDecodeError, ValueError):
+                # Fallback plan if LLM fails
+                plan = {
+                    "metric": inspection_data.get('columns', {}).get('numeric', ['volume'])[0] if inspection_data.get('columns', {}).get('numeric') else 'volume',
+                    "timestamp_col": inspection_data.get('columns', {}).get('datetime', ['created_at'])[0] if inspection_data.get('columns', {}).get('datetime') else 'created_at',
+                    "method": "ai_analysis", 
+                    "threshold": "ai_determined",
+                    "schedule_minutes": 15,
+                    "action": "slack",
+                    "action_config": {"webhook_url": slack_webhook if slack_webhook else "not_provided"}
+                }
+        else:
+            # Fallback plan
+            plan = {
+                "metric": "volume",
+                "timestamp_col": "created_at",
+                "method": "ai_analysis",
+                "threshold": "ai_determined", 
+                "schedule_minutes": 15,
+                "action": "slack",
+                "action_config": {"webhook_url": slack_webhook if slack_webhook else "not_provided"}
+            }
+        
+        return {
+            "success": True,
+            "plan": plan
+        }
+        
+    except Exception as e:
+        print(f"❌ Auto-planning failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "plan": None
+        }
+
+@modal.web_endpoint(method="POST")
+def run_once(request_data: Dict[str, Any]):
+    """Run the monitoring pipeline once with the provided plan"""
+    try:
+        plan = request_data.get("plan", {})
+        table_name = request_data.get("table_name", "options_trades")
+        
+        print(f"🚀 Running monitoring pipeline once for table: {table_name}")
+        
+        # Fetch data for analysis
+        sample_data = fetch_supabase_data.remote(table_name, 20)
+        
+        if not sample_data:
+            return {
+                "success": False,
+                "error": f"No data available in table {table_name}",
+                "results": None
+            }
+        
+        # Build analysis prompt based on the plan
+        analysis_prompt = f"""
+You are an AI monitoring system. Analyze this data for anomalies and insights.
+
+MONITORING PLAN:
+- Metric to monitor: {plan.get('metric', 'volume')}
+- Method: {plan.get('method', 'ai_analysis')}
+- Goal: Detect patterns worth alerting about
+
+DATA TO ANALYZE:
+{json.dumps(sample_data, indent=2)}
+
+Instructions:
+1. Look for any unusual patterns, spikes, or anomalies in the data
+2. Focus on the specified metric: {plan.get('metric', 'volume')}
+3. Provide actionable insights
+
+Return your analysis in this JSON format:
+
+{{
+    "summary": "Brief analysis summary",
+    "total_anomalies": <number>,
+    "anomalies": [
+        {{
+            "symbol": "Data identifier",
+            "value": "Specific values found",
+            "severity": "HIGH/MEDIUM/LOW",
+            "details": "What makes this worth alerting about",
+            "action_required": "Recommended action",
+            "reason": "Why this is significant"
+        }}
+    ],
+    "should_alert": true/false,
+    "alert_message": "Message to send to Slack if alerting"
+}}
+"""
+        
+        # Run the analysis
+        results = universal_analysis(analysis_prompt, f"Monitor {plan.get('metric', 'data')}", "run-once")
+        
+        # Send Slack alert if configured and anomalies found
+        slack_sent = False
+        webhook_url = plan.get('action_config', {}).get('webhook_url')
+        
+        if webhook_url and webhook_url != "not_provided" and results.get('total_anomalies', 0) > 0:
+            slack_sent = send_slack_alert(webhook_url, results, table_name)
+        
+        return {
+            "success": True,
+            "results": results,
+            "slack_sent": slack_sent,
+            "analyzed_records": len(sample_data),
+            "plan_used": plan
+        }
+        
+    except Exception as e:
+        print(f"❌ Run once failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "results": None
+        }
+
+def send_slack_alert(webhook_url: str, analysis_results: Dict[str, Any], table_name: str) -> bool:
+    """Send alert to Slack"""
+    try:
+        import requests
+        
+        anomaly_count = analysis_results.get('total_anomalies', 0)
+        summary = analysis_results.get('summary', 'Analysis completed')
+        
+        message = {
+            "text": f"🚨 Anomaly Alert from {table_name}",
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"🚨 {anomaly_count} Anomalies Detected"
+                    }
+                },
+                {
+                    "type": "section", 
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Table:* {table_name}\n*Summary:* {summary}"
+                    }
+                }
+            ]
+        }
+        
+        # Add anomaly details
+        anomalies = analysis_results.get('anomalies', [])
+        for i, anomaly in enumerate(anomalies[:3]):  # Show first 3
+            message["blocks"].append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn", 
+                    "text": f"*{anomaly.get('symbol', f'Anomaly {i+1}')}*\n{anomaly.get('details', 'No details')}\n*Action:* {anomaly.get('action_required', 'Review')}"
+                }
+            })
+        
+        response = requests.post(webhook_url, json=message, timeout=10)
+        return response.status_code == 200
+        
+    except Exception as e:
+        print(f"❌ Slack alert failed: {e}")
+        return False
+
 @modal.web_endpoint(method="POST")
 def run_monitoring_scenario(request_data: Dict[str, Any]):
-    """Universal LLM-native data analysis endpoint"""
+    """Legacy endpoint - Universal LLM-native data analysis endpoint"""
     try:
         query = request_data.get("query", "analyze data")
         table_name = request_data.get("table_name", "options_trades")

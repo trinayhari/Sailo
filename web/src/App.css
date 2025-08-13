@@ -37,6 +37,38 @@
   padding: 2em;
 }
 
+.nav-buttons {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.nav-buttons button {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border: 2px solid #646cff;
+  border-radius: 8px;
+  background: transparent;
+  color: #646cff;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.nav-buttons button:hover {
+  background: #646cff;
+  color: white;
+  transform: translateY(-2px);
+}
+
+.nav-buttons button.active {
+  background: #646cff;
+  color: white;
+  box-shadow: 0 4px 15px rgba(100, 108, 255, 0.3);
+}
+
 .read-the-docs {
   color: #888;
 }
